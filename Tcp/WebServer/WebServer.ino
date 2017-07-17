@@ -21,7 +21,7 @@
 
 // MAC address and IP
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
-IPAddress ip(192, 168, 44, 44);
+IPAddress ip(169, 254, 44, 44);
 
 // Initialize the Ethernet server library
 EthernetServer server(35580);
@@ -47,8 +47,14 @@ uint16_t current_turn = 0;
 uint16_t TURN_ANGLE = 0;
 uint16_t current_angle = 0;
 
+/* напрвление вращения */
+bool spin_direction_clockwise = true;
+const uint8_t   pinRelay = 5;
+
 // Подключаем библиотеку iarduino_Encoder_tmr для работы с энкодерами через аппаратный таймер 
 iarduino_Encoder_tmr enc (pinEncA, pinEncB);
+
+bool started = false;
 
 void setup() {
   // Open serial communications and wait for port to open:
@@ -70,6 +76,9 @@ void setup() {
   enc.begin();   
   pinMode(pinEncBTN,   INPUT);
   
+  pinMode(pinRelay,   OUTPUT);
+  digitalWrite(pinRelay, LOW);
+  
 }
 
 void loop()
@@ -77,30 +86,53 @@ void loop()
   funcEncoderRead();
   funcTcpRead();
 }
-        
+
+void start_engine()
+{
+   current_turn = 0;
+   current_angle = 0;
+   
+   digitalWrite(pinEnginePw, LOW);
+   
+   if(spin_direction_clockwise) digitalWrite(pinRelay, HIGH);
+   else digitalWrite(pinRelay, LOW);
+     
+   digitalWrite(pinEnginePw, ENGINE_PW);
+   
+   started = true;
+   
+}
+
+void stop_engine()
+{
+   digitalWrite(pinEnginePw, LOW);
+   started = false;
+   
+   int i = enc.read();
+   current_turn = 0;
+   current_angle = 0;
+}
+
 void funcEncoderRead(void)
 {
+  if(!started) return;
+  
+  int i = enc.read();
+//  Serial.println(String(TURN_ANGLE));
      if(TURN_ANGLE)
      {
-       int i = enc.read();
        current_angle += sq(i);
-       Serial.println(String(current_angle));
+       Serial.println(String(current_angle * 18));
        if(current_angle * 18 >= TURN_ANGLE)
-       {
-         current_angle = 0;
-         analogWrite(pinEnginePw, LOW);
-        }
+         stop_engine();
+         
      }
      else if(TURN_COUNT)
      {
-       int i = enc.read();
        current_turn += sq(i);
          
        if(floor(current_turn / 20) >= TURN_COUNT)
-       {
-         current_turn = 0;
-         analogWrite(pinEnginePw, LOW);
-       }
+         stop_engine();
      }
      
 }
@@ -134,13 +166,13 @@ void funcTcpRead()
       if(cmd.startsWith("SET:TURN:COUNT:"))
       {
         TURN_COUNT = getCmdValue(cmd);
-        TURN_ANGLE = 0;
+        if(TURN_COUNT) TURN_ANGLE = 0;
         client.write("OK");
       }
       else if (cmd.startsWith("SET:TURN:ANGLE:"))
       {
         TURN_ANGLE = getCmdValue(cmd);
-        TURN_COUNT = 0;
+        if(TURN_ANGLE) TURN_COUNT = 0;
         client.write("OK");
       }
       
@@ -150,23 +182,35 @@ void funcTcpRead()
         client.write("OK");
       }
       
+      else if (cmd == "SET:DIRECTION:CLOCKWISE")
+      {
+        spin_direction_clockwise = true;
+        client.write("OK");
+      }
+      
+      else if (cmd == "SET:DIRECTION:ANTICLOCKWISE")
+      {
+        spin_direction_clockwise = false;
+        client.write("OK");
+      }      
+      
       else if (cmd == "START")
       {
-        analogWrite(pinEnginePw, ENGINE_PW);
+        start_engine();
         client.write("OK");
       }
       
       else if (cmd == "STOP")
       {
-        analogWrite(pinEnginePw, LOW);
+        stop_engine();
         client.write("OK");
       }
       
       else
-        client.write("Unkcnown command");
+        client.write("Unknown command");
 
-    Serial.println("sssss");
-    delay(10);
+
+    delay(1);
     client.stop();
     Serial.println("client disconnected");
         
