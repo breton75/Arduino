@@ -1,19 +1,5 @@
-/*
-  Web Server
-
- A simple web server that shows the value of the analog input pins.
- using an Arduino Wiznet Ethernet shield.
-
- Circuit:
- * Ethernet shield attached to pins 10, 11, 12, 13
- * Analog inputs attached to pins A0 through A5 (optional)
-
- created 18 Dec 2009
- by David A. Mellis
- modified 9 Apr 2012
- by Tom Igoe
-
- */
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 #include <SPI.h>
 #include <Ethernet.h>
@@ -56,6 +42,21 @@ iarduino_Encoder_tmr enc (pinEncA, pinEncB);
 
 bool started = false;
 
+/* Температура */
+#define ONE_WIRE_BUS 6 // номер пина к которому подключен DS18B20
+
+// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass our oneWire reference to Dallas Temperature. 
+DallasTemperature sensors(&oneWire);
+
+// arrays to hold device address
+DeviceAddress insideThermometer;
+
+float current_temp = 0;
+unsigned long timer = 0;
+
 void setup() {
   // Open serial communications and wait for port to open:
   Serial.begin(9600);
@@ -79,11 +80,19 @@ void setup() {
   pinMode(pinRelay,   OUTPUT);
   digitalWrite(pinRelay, LOW);
   
+  sensors.begin();
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0");
+  sensors.setWaitForConversion(false);
+  sensors.requestTemperatures();
+  
+  timer = millis();
+  
 }
 
 void loop()
 {
   funcEncoderRead();
+  funcTempRead();
   funcTcpRead();
 }
 
@@ -109,8 +118,6 @@ void stop_engine()
    started = false;
    
    int i = enc.read();
-   current_turn = 0;
-   current_angle = 0;
 }
 
 void funcEncoderRead(void)
@@ -118,23 +125,35 @@ void funcEncoderRead(void)
   if(!started) return;
   
   int i = enc.read();
-//  Serial.println(String(TURN_ANGLE));
-     if(TURN_ANGLE)
-     {
-       current_angle += sq(i);
-       Serial.println(String(current_angle * 18));
-       if(current_angle * 18 >= TURN_ANGLE)
-         stop_engine();
+
+  if(TURN_ANGLE)
+  {
+    current_angle += sq(i);
+  Serial.println(String(current_angle));
+    if(current_angle * 18 >= TURN_ANGLE)
+      stop_engine();
          
-     }
-     else if(TURN_COUNT)
-     {
-       current_turn += sq(i);
+  }
+  else if(TURN_COUNT)
+  {
+    current_turn += sq(i);
          
-       if(floor(current_turn / 20) >= TURN_COUNT)
-         stop_engine();
-     }
-     
+    if(floor(current_turn / 20) >= TURN_COUNT)
+      stop_engine();
+  }
+}
+
+void funcTempRead()
+{
+  if(!started) return;
+  if(millis() - timer < 1000) return;
+    
+  timer = millis();
+  
+  current_temp = sensors.getTempC(insideThermometer);
+  
+  sensors.requestTemperatures();
+  Serial.println(String(current_temp));
 }
         
 void funcTcpRead()
@@ -142,77 +161,108 @@ void funcTcpRead()
     // listen for incoming clients
   EthernetClient client = server.available();
   
-  String s = "";
   if (client)
   {
     Serial.println("new client");
 
 //      unsigned long avail = ;
       String cmd = "";      
+      String cmdList = "";
+      String state = "STATE;";
       
       while(client.available())
       {
         char c = client.read();
-        cmd += c;
+        cmdList += c;
         
         if(c == '\n') break;
       }
-      
-      cmd.trim();
-      
-      if(cmd == "") return;
 
-      /* начинаем проверку команды */
-      if(cmd.startsWith("SET:TURN:COUNT:"))
-      {
-        TURN_COUNT = getCmdValue(cmd);
-        if(TURN_COUNT) TURN_ANGLE = 0;
-        client.write("OK");
-      }
-      else if (cmd.startsWith("SET:TURN:ANGLE:"))
-      {
-        TURN_ANGLE = getCmdValue(cmd);
-        if(TURN_ANGLE) TURN_COUNT = 0;
-        client.write("OK");
-      }
+//String(45, HEX);
       
-      else if (cmd.startsWith("SET:ENGINE:PW:"))
+      /** разбираем список полученных команд **/
+      while(cmdList.length() > 0)
       {
-        ENGINE_PW = getCmdValue(cmd);
-        client.write("OK");
-      }
-      
-      else if (cmd == "SET:DIRECTION:CLOCKWISE")
-      {
-        spin_direction_clockwise = true;
-        client.write("OK");
-      }
-      
-      else if (cmd == "SET:DIRECTION:ANTICLOCKWISE")
-      {
-        spin_direction_clockwise = false;
-        client.write("OK");
-      }      
-      
-      else if (cmd == "START")
-      {
-        start_engine();
-        client.write("OK");
-      }
-      
-      else if (cmd == "STOP")
-      {
-        stop_engine();
-        client.write("OK");
-      }
-      
-      else
-        client.write("Unknown command");
+        int pos = cmdList.indexOf(';');
+        if(pos == -1) {
+          cmd = cmdList;
+          cmdList = "";
+        }
+        else {
+          cmd = cmdList.substring(0, pos);
+          cmdList.remove(0, pos + 1);
+        }
+          
+        cmd.trim();  
+  
+        Serial.println(cmd);
+        
 
+        /* проверяем очередную команду */
+        if(cmd.startsWith("SET:TURN:"))
+        {
+          TURN_COUNT = getCmdValue(cmd);
+          if(TURN_COUNT) TURN_ANGLE = 0;
+          state += ("TURN:" + String(TURN_COUNT) + ';');
+        }
+        else if (cmd.startsWith("SET:ANGLE:"))
+        {
+          TURN_ANGLE = getCmdValue(cmd);
+          if(TURN_ANGLE) TURN_COUNT = 0;
+          state += ("ANGLE:" + String(TURN_ANGLE) + ';');
+        }
+      
+        else if (cmd.startsWith("SET:ENGINE:"))
+        {
+          ENGINE_PW = getCmdValue(cmd);
+          state += ("ENGINE:" + String(ENGINE_PW) + ';');
+        }
+      
+        else if (cmd == "SET:DIRECTION:CLOCKWISE")
+        {
+          spin_direction_clockwise = true;
+          state += "DIRECTION:CLOCKWISE;";
+        }
+      
+        else if (cmd == "SET:DIRECTION:ANTICLOCKWISE")
+        {
+          spin_direction_clockwise = false;
+          state += "DIRECTION:ANTICLOCKWISE;";
+        }      
+      
+        else if (cmd == "START")
+        {
+          start_engine();
+          state += "STARTED;";
+        }
+      
+        else if (cmd == "STOP")
+        {
+          stop_engine();
+          state += "STOPPED;";
+        }
+        
+        else if (cmd == "STATE") {
+          state += started ? "STARTED;" : "STOPPED;";
+          state += ("CURRENT:TEMP:" + String(current_temp) + ';');
+          state += ("CURRENT:TURN:" + String(floor(current_turn / 20)) + ';');
+          state += ("CURRENT:ANGLE:" + String(current_angle * 18) + ';');
+        }
+      
+        else {
+          state = "UNKNOWN_COMMAND:" + cmd + ";";
+          break;
+        }
+      }
 
     delay(1);
-    client.stop();
-    Serial.println("client disconnected");
+    
+    if(state != "STATE;") 
+      client.write(state.c_str(), state.length());
+
+      
+//    client.stop();
+//    Serial.println("client disconnected");
         
   }
 }
@@ -220,7 +270,7 @@ void funcTcpRead()
 uint16_t getCmdValue(String cmd)
 {
   String s_val = cmd.substring(cmd.lastIndexOf(":") + 1);
-  uint16_t val = s_val.toInt();;
+  uint16_t val = s_val.toInt();
 
   return val;
   
