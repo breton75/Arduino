@@ -33,9 +33,9 @@ uint16_t current_turn = 0;
 uint16_t TURN_ANGLE = 0;
 uint16_t current_angle = 0;
 
-/* напрвление вращения */
+/* направление вращения */
 bool spin_direction_clockwise = true;
-const uint8_t   pinRelay = 5;
+const uint8_t   pinRelay = 3;
 
 // Подключаем библиотеку iarduino_Encoder_tmr для работы с энкодерами через аппаратный таймер 
 iarduino_Encoder_tmr enc (pinEncA, pinEncB);
@@ -43,10 +43,10 @@ iarduino_Encoder_tmr enc (pinEncA, pinEncB);
 bool started = false;
 
 /* Температура */
-#define ONE_WIRE_BUS 6 // номер пина к которому подключен DS18B20
+const uint8_t   pinOneWireBus = 6; // номер пина к которому подключен DS18B20
 
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
-OneWire oneWire(ONE_WIRE_BUS);
+OneWire oneWire(pinOneWireBus);
 
 // Pass our oneWire reference to Dallas Temperature. 
 DallasTemperature sensors(&oneWire);
@@ -64,6 +64,7 @@ void setup() {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
 
+  TCCR1B = TCCR1B & 0b11111000 | 0x03;
 
   // start the Ethernet connection and the server:
   Ethernet.begin(mac, ip);
@@ -101,12 +102,12 @@ void start_engine()
    current_turn = 0;
    current_angle = 0;
    
-   digitalWrite(pinEnginePw, LOW);
+   analogWrite(pinEnginePw, LOW);
    
    if(spin_direction_clockwise) digitalWrite(pinRelay, HIGH);
    else digitalWrite(pinRelay, LOW);
      
-   digitalWrite(pinEnginePw, ENGINE_PW);
+   analogWrite(pinEnginePw, ENGINE_PW);
    
    started = true;
    
@@ -114,7 +115,7 @@ void start_engine()
 
 void stop_engine()
 {
-   digitalWrite(pinEnginePw, LOW);
+   analogWrite(pinEnginePw, LOW);
    started = false;
    
    int i = enc.read();
@@ -125,19 +126,18 @@ void funcEncoderRead(void)
   if(!started) return;
   
   int i = enc.read();
-
+  current_angle += sq(i);
+  current_turn += sq(i);
+  
   if(TURN_ANGLE)
   {
-    current_angle += sq(i);
-  Serial.println(String(current_angle));
+    //  Serial.println(String(current_angle));
     if(current_angle * 18 >= TURN_ANGLE)
       stop_engine();
          
   }
   else if(TURN_COUNT)
   {
-    current_turn += sq(i);
-         
     if(floor(current_turn / 20) >= TURN_COUNT)
       stop_engine();
   }
